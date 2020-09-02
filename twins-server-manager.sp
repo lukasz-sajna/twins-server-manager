@@ -14,8 +14,11 @@ ConVar g_hUnreadyMsg;
 ConVar g_hReadyCounterMsg;
 ConVar g_hUnreadyParticipantsMsg;
 ConVar g_hHowToReadyMsg;
+ConVar g_hUnpauseRequestMsg;
 
 bool g_ReadyCheck[MAXPLAYERS+1];
+bool g_ctUnpaused = false;
+bool g_tUnpaused = false;
 
 Handle db;
 
@@ -44,6 +47,7 @@ public void SetConVars() {
     g_hReadyCounterMsg = CreateConVar("sm_readyCounterMsg", "{SERVER_TAG} {NORMAL}- {DARK_RED}{PLAYERS_READY} {NORMAL}of {DARK_RED}{PLAYERS} {NORMAL}participants are ready!", "");
     g_hUnreadyParticipantsMsg = CreateConVar("sm_unReadyParticipantsMsg", "{SERVER_TAG} {NORMAL}- not ready participants: {PARTICIPANTS}", "");
     g_hHowToReadyMsg = CreateConVar("sm_howToReadyMsg", "{SERVER_TAG} {NORMAL}- If you are {IS_READY} to play, type !{IS_READY_CMD} in chat", "");
+    g_hUnpauseRequestMsg = CreateConVar("sm_unpauseRequest", "{SERVER_TAG} {NORMAL}- The {REQUESTING_TEAM} team wants to unpause. Waiting for the {CONFIRMING_TEAM} team to type {YELLOW}!unpause");
 }
 
 public void SetCommandListeners() {
@@ -57,6 +61,8 @@ public void SetTimers() {
 public void SetRegConsoleCommands() {
     RegConsoleCmd("sm_ready", Command_Ready, "Set player ready to start the match");
     RegConsoleCmd("sm_unready", Command_Unready, "Set player unready to start the match");
+    RegConsoleCmd("sm_pause", Command_Pause, "Requests a pause");
+    RegConsoleCmd("sm_unpause", Command_Unpause, "Requests an unpause");
 }
 
 public Action Command_Ready(int client, int args) {
@@ -114,6 +120,38 @@ public Action Command_Unready(int client, int args) {
     PrintReadyParticipants();
     PrintNotReadyParticipants();
     
+}
+
+public Action Command_Pause(int client, int args) {
+    if (IsPaused() || !IsValidClient(client) || InWarmup())
+        return;
+
+    g_ctUnpaused = false;
+    g_tUnpaused = false;
+
+    ServerCommand("mp_pause_match");
+    PrintToChatAll("%N has requested a pause.", client);
+}
+
+public Action Command_Unpause(int client, int args) {
+    if (!IsPaused() || !IsValidClient(client) || InWarmup())
+        return;
+
+    int team = GetClientTeam(client);
+    if (team == CS_TEAM_T)
+        g_tUnpaused = true;
+    else if (team == CS_TEAM_CT)
+        g_ctUnpaused = true;
+
+    PrintToChatAll("%N requested a unpause", client);
+
+    if (g_tUnpaused && g_ctUnpaused)  {
+        ServerCommand("mp_unpause_match");
+    } else if (g_tUnpaused && !g_ctUnpaused) {
+        PrintUnpauseRequest(client, !g_tUnpaused);
+    } else if (!g_tUnpaused && g_ctUnpaused) {
+        PrintUnpauseRequest(client, g_tUnpaused);
+    }
 }
 
 public Action Command_JoinTeam(int client, const char[] command, int argc) {    
@@ -225,6 +263,37 @@ public void PrintHowToReady(int client, bool isReady) {
     Colorize(message, sizeof(message));
 
     PrintToChat(client, message);
+}
+
+public void PrintUnpauseRequest(int client, bool isTerroristsTeamRequested) {
+
+    for (int i = 1; i <= MaxClients; i++){
+        if (GetClientTeam(i) == CS_TEAM_T && !isTerroristsTeamRequested){
+            char message[256];
+            g_hUnpauseRequestMsg.GetString(message, sizeof(message));
+            CreateUnpauseRequestMessage(message, sizeof(message), !isTerroristsTeamRequested);
+            PrintToChat(i, message);
+        } else if (GetClientTeam(i) == CS_TEAM_CT && isTerroristsTeamRequested){
+            char message[256];
+            g_hUnpauseRequestMsg.GetString(message, sizeof(message));
+            CreateUnpauseRequestMessage(message, sizeof(message), isTerroristsTeamRequested);
+            PrintToChat(i, message);
+        }
+    }
+}
+
+public Action CreateUnpauseRequestMessage(char[] message, int size, bool isTerroristsTeamRequested) {
+    ReplaceServerTag(message, size);
+    
+    if(isTerroristsTeamRequested) {
+        ReplaceString(message, size, "{REQUESTING_TEAM}", "T", false);
+        ReplaceString(message, size, "{CONFIRMING_TEAM}", "CT", false);
+    } else {
+        ReplaceString(message, size, "{REQUESTING_TEAM}", "CT", false);
+        ReplaceString(message, size, "{CONFIRMING_TEAM}", "T", false);
+    }
+
+    Colorize(message, size);
 }
 
 public Action ReplaceServerTag(char[] message, int size) {        
