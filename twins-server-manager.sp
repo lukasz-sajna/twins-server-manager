@@ -19,6 +19,8 @@ ConVar g_hUnpauseRequestMsg;
 bool g_ReadyCheck[MAXPLAYERS+1];
 bool g_ctUnpaused = false;
 bool g_tUnpaused = false;
+int gameType;
+int gameMode;
 
 Handle db;
 
@@ -38,6 +40,11 @@ public void OnPluginStart() {
     SetCommandListeners();
     SetTimers();
     SetRegConsoleCommands();
+    SetRegAdminCommands();
+    HookEvents();
+
+    gameType = GetConVarInt(FindConVar("game_type"));
+    gameMode = GetConVarInt(FindConVar("game_mode"));
 }
 
 public void SetConVars() {
@@ -63,17 +70,62 @@ public void SetRegConsoleCommands() {
     RegConsoleCmd("sm_unready", Command_Unready, "Set player unready to start the match");
     RegConsoleCmd("sm_pause", Command_Pause, "Requests a pause");
     RegConsoleCmd("sm_unpause", Command_Unpause, "Requests an unpause");
+    RegConsoleCmd("sm_mode", Command_Mode, "Requests an unpause");
+}
+
+public void SetRegAdminCommands() {
+    // RegAdminCmd("sm_restore", Command_Restore, "Restore round from backup");
+}
+
+public Action Command_Mode(int client, int args) {
+    if (IsWingman()) {
+        PrintToChatAll("Wingman");
+    } else if (IsCompetitive()) {        
+        PrintToChatAll("Competitive");
+    } else {
+        PrintToChatAll("Other");
+    }
+}
+
+public void HookEvents() {
+    HookEvent("player_death", Event_PlayerDeath, EventHookMode_Post);
+    HookEvent("game_newmap", Event_GameNewMapPre, EventHookMode_Pre);
+    HookEvent("round_start", Event_RoundStart);
+}
+
+public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast) {
+    int victim = GetClientOfUserId(event.GetInt("userid"));
+
+    if(IsValidClient(victim) && InWarmup()) {
+        SetEntProp(victim, Prop_Send, "m_iAccount", 16000);
+    }
+}
+
+public Action Event_GameNewMapPre(Event event, const char[] name, bool dontBroadcast) {
+    gameType = GetConVarInt(FindConVar("game_type"));
+    gameMode = GetConVarInt(FindConVar("game_mode"));  
+
+    ServerCommand("mp_warmup_pausetimer 1");
+    if (InWarmup() && (IsWingman() || IsCompetitive())) {
+        SetWeaponDropAfterDeath(0, 0 ,0 ,0);
+    }
+}
+
+public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {    
+    for (int i = 1; i <= MaxClients; i++){
+        g_ReadyCheck[i] = false;
+    }
 }
 
 public Action Command_Ready(int client, int args) {
     if(!InWarmup())
-        return;
+        return Plugin_Handled;
 
     if (!IsValidClient(client))
-        return;
+        return Plugin_Handled;
 
     if(g_ReadyCheck[client])
-        return;
+        return Plugin_Handled;
 
     g_ReadyCheck[client] = true;
     char message[256];
@@ -93,7 +145,12 @@ public Action Command_Ready(int client, int args) {
 
     if (AllPlayersAreReady()){
         EndWarmup();
+        if (IsWingman() || IsCompetitive()) {
+            SetWeaponDropAfterDeath(1, 2, 1, 1);
+        }
     }
+
+    return Plugin_Handled;
 }
 
 public Action Command_Unready(int client, int args) {
@@ -148,14 +205,17 @@ public Action Command_Unpause(int client, int args) {
     if (g_tUnpaused && g_ctUnpaused)  {
         ServerCommand("mp_unpause_match");
     } else if (g_tUnpaused && !g_ctUnpaused) {
-        PrintUnpauseRequest(client, !g_tUnpaused);
+        PrintUnpauseRequest(client, g_tUnpaused, g_ctUnpaused);
     } else if (!g_tUnpaused && g_ctUnpaused) {
-        PrintUnpauseRequest(client, g_tUnpaused);
+        PrintUnpauseRequest(client, g_tUnpaused, g_ctUnpaused);
     }
 }
 
 public Action Command_JoinTeam(int client, const char[] command, int argc) {    
     ServerCommand("mp_warmup_pausetimer 1");
+    if (InWarmup() && (IsWingman() || IsCompetitive())) {
+        SetWeaponDropAfterDeath(0, 0 ,0 ,0);
+    }
 
     if (!IsValidClient(client))
         return;
@@ -265,30 +325,33 @@ public void PrintHowToReady(int client, bool isReady) {
     PrintToChat(client, message);
 }
 
-public void PrintUnpauseRequest(int client, bool isTerroristsTeamRequested) {
+public void PrintUnpauseRequest(int client, bool isTerroristsUnpaused, bool isCounterTerroristsUnpaused) {
 
     for (int i = 1; i <= MaxClients; i++){
-        if (GetClientTeam(i) == CS_TEAM_T && !isTerroristsTeamRequested){
+        if (!IsPlayer(i))
+            return;
+
+        if (GetClientTeam(i) == CS_TEAM_T && isCounterTerroristsUnpaused){
             char message[256];
             g_hUnpauseRequestMsg.GetString(message, sizeof(message));
-            CreateUnpauseRequestMessage(message, sizeof(message), !isTerroristsTeamRequested);
+            CreateUnpauseRequestMessage(message, sizeof(message), isTerroristsUnpaused, isCounterTerroristsUnpaused);
             PrintToChat(i, message);
-        } else if (GetClientTeam(i) == CS_TEAM_CT && isTerroristsTeamRequested){
+        } else if (GetClientTeam(i) == CS_TEAM_CT && isTerroristsUnpaused){
             char message[256];
             g_hUnpauseRequestMsg.GetString(message, sizeof(message));
-            CreateUnpauseRequestMessage(message, sizeof(message), isTerroristsTeamRequested);
+            CreateUnpauseRequestMessage(message, sizeof(message), isTerroristsUnpaused, isCounterTerroristsUnpaused);
             PrintToChat(i, message);
         }
     }
 }
 
-public Action CreateUnpauseRequestMessage(char[] message, int size, bool isTerroristsTeamRequested) {
+public Action CreateUnpauseRequestMessage(char[] message, int size, bool isTerroristsTeamRequested, bool isCounterTerroristsUnpaused) {
     ReplaceServerTag(message, size);
     
     if(isTerroristsTeamRequested) {
         ReplaceString(message, size, "{REQUESTING_TEAM}", "T", false);
         ReplaceString(message, size, "{CONFIRMING_TEAM}", "CT", false);
-    } else {
+    } else if (isCounterTerroristsUnpaused) {
         ReplaceString(message, size, "{REQUESTING_TEAM}", "CT", false);
         ReplaceString(message, size, "{CONFIRMING_TEAM}", "T", false);
     }
@@ -301,4 +364,23 @@ public Action ReplaceServerTag(char[] message, int size) {
     g_hServerTag.GetString(serverTag, sizeof(serverTag));
     
     ReplaceString(message, size, "{SERVER_TAG}", serverTag, false);
+}
+
+public void SetWeaponDropAfterDeath(int defuser, int grenade, int gun, int taser) {
+    ServerCommand("mp_death_drop_defuser %d", defuser);    
+    ServerCommand("mp_death_drop_grenade %d", grenade);    
+    ServerCommand("mp_death_drop_gun %d", gun);    
+    ServerCommand("mp_death_drop_taser %d", taser);
+}
+
+public bool IsWingman() {
+    return gameType == 0 && gameMode == 2;
+}
+
+public bool IsCompetitive() {
+    return gameType == 0 && gameMode == 1;
+}
+
+public bool IsOther() {
+    return gameType != 0;
 }
