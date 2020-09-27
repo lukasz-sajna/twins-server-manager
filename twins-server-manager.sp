@@ -42,9 +42,7 @@ public void OnPluginStart() {
     SetRegConsoleCommands();
     SetRegAdminCommands();
     HookEvents();
-
-    gameType = GetConVarInt(FindConVar("game_type"));
-    gameMode = GetConVarInt(FindConVar("game_mode"));
+    GetGameMode();
 }
 
 public void SetConVars() {
@@ -71,10 +69,47 @@ public void SetRegConsoleCommands() {
     RegConsoleCmd("sm_pause", Command_Pause, "Requests a pause");
     RegConsoleCmd("sm_unpause", Command_Unpause, "Requests an unpause");
     RegConsoleCmd("sm_mode", Command_Mode, "Requests an unpause");
+    RegConsoleCmd("sm_ver", Command_Version, "Prints plugin version");
 }
 
 public void SetRegAdminCommands() {
     // RegAdminCmd("sm_restore", Command_Restore, "Restore round from backup");
+}
+
+public void OnClientPutInServer(int client)
+{
+    SDKHook(client, SDKHook_WeaponDrop, OnWeaponDrop);
+    
+    ServerCommand("mp_warmup_pausetimer 1");
+    GetGameMode();
+    if (InWarmup()) {
+        SetWeaponDropAfterDeath(0, 0 ,0 ,0);
+    }
+
+    if (!IsValidClient(client))
+        return;
+
+    g_ReadyCheck[client] = false;
+}
+
+public Action OnWeaponDrop(int client,any weapon)
+{
+    if (weapon && IsValidEdict(weapon) && IsValidEntity(weapon) && InWarmup()) {
+        CreateTimer(0.1, DeleteWeapon, weapon);
+    }
+
+    return Plugin_Continue;
+}
+
+public Action DeleteWeapon(Handle timer, any weapon)
+{
+    if (weapon && IsValidEdict(weapon) && IsValidEntity(weapon) && InWarmup()) {
+        RemoveEdict(weapon);
+    }
+} 
+
+public Action Command_Version(int client, int args){
+    PrintToChat(client, "1.0006");
 }
 
 public Action Command_Mode(int client, int args) {
@@ -89,7 +124,7 @@ public Action Command_Mode(int client, int args) {
 
 public void HookEvents() {
     HookEvent("player_death", Event_PlayerDeath, EventHookMode_Post);
-    HookEvent("game_newmap", Event_GameNewMapPre, EventHookMode_Pre);
+    HookEvent("game_newmap", Event_GameNewMap, EventHookMode_Post);
     HookEvent("round_start", Event_RoundStart);
 }
 
@@ -101,12 +136,11 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
     }
 }
 
-public Action Event_GameNewMapPre(Event event, const char[] name, bool dontBroadcast) {
-    gameType = GetConVarInt(FindConVar("game_type"));
-    gameMode = GetConVarInt(FindConVar("game_mode"));  
+public Action Event_GameNewMap(Event event, const char[] name, bool dontBroadcast) {
+    GetGameMode();
 
     ServerCommand("mp_warmup_pausetimer 1");
-    if (InWarmup() && (IsWingman() || IsCompetitive())) {
+    if (InWarmup()) {
         SetWeaponDropAfterDeath(0, 0 ,0 ,0);
     }
 }
@@ -145,9 +179,7 @@ public Action Command_Ready(int client, int args) {
 
     if (AllPlayersAreReady()){
         EndWarmup();
-        if (IsWingman() || IsCompetitive()) {
-            SetWeaponDropAfterDeath(1, 2, 1, 1);
-        }
+        SetWeaponDropAfterDeath(1, 2, 1, 1);
     }
 
     return Plugin_Handled;
@@ -213,7 +245,8 @@ public Action Command_Unpause(int client, int args) {
 
 public Action Command_JoinTeam(int client, const char[] command, int argc) {    
     ServerCommand("mp_warmup_pausetimer 1");
-    if (InWarmup() && (IsWingman() || IsCompetitive())) {
+    GetGameMode();
+    if (InWarmup()) {
         SetWeaponDropAfterDeath(0, 0 ,0 ,0);
     }
 
@@ -371,6 +404,11 @@ public void SetWeaponDropAfterDeath(int defuser, int grenade, int gun, int taser
     ServerCommand("mp_death_drop_grenade %d", grenade);    
     ServerCommand("mp_death_drop_gun %d", gun);    
     ServerCommand("mp_death_drop_taser %d", taser);
+}
+
+void GetGameMode() {
+    gameType = GetConVarInt(FindConVar("game_type"));
+    gameMode = GetConVarInt(FindConVar("game_mode"));      
 }
 
 public bool IsWingman() {
